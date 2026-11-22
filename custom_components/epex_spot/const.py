@@ -53,8 +53,7 @@ EMPTY_EXTREME_PRICE_INTERVAL_RESP = {
     "total_price_per_kwh": None,
 }
 
-TIMEZONE_HOFER_GRUENSTROM = "Europe/Vienna"
-TIMEZONE_SPOTTY = "Europe/Vienna"
+TIMEZONE_AUSTRIA = "Europe/Vienna"
 
 UOM_EUR_PER_KWH = "€/kWh"
 UOM_MWH = "MWh"

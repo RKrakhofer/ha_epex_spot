@@ -45,7 +45,6 @@ from .const import (
     CONFIG_VERSION,
     DOMAIN,
 )
-from .EPEXSpot.Spotty import SpottyContractError
 from .localization import CURRENCY_MAPPING
 from .SourceShell import SourceShell
 
@@ -78,10 +77,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     try:
         await source.fetch()
         source.update_time()
-    except SpottyContractError as err:
-        # Retrying cannot fix a rejected contract id, so stop instead of
-        # reconnecting forever. Re-add the entry with the current id.
-        raise ConfigEntryError(str(err)) from err
+    except ConfigEntryError:
+        # Configuration errors cannot be fixed by retrying, so let Home
+        # Assistant report them instead of scheduling endless retries.
+        raise
     except Exception as err:  # pylint: disable=broad-except
         ex = ConfigEntryNotReady()
         ex.__cause__ = err

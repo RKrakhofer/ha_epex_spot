@@ -21,21 +21,19 @@ from zoneinfo import ZoneInfo
 
 import aiohttp
 
+from homeassistant.exceptions import ConfigEntryError
+
 from ...common import Marketprice, average_marketdata
-from ...const import TIMEZONE_SPOTTY
+from ...const import TIMEZONE_AUSTRIA
 
 _LOGGER = logging.getLogger(__name__)
 
 API_URL = "https://at.spotty.app/api/prices/MARKET/{contract_id}"
-TIMEZONE = ZoneInfo(TIMEZONE_SPOTTY)
+TIMEZONE = ZoneInfo(TIMEZONE_AUSTRIA)
 
 
 class SpottyError(Exception):
     """Error while talking to the Spotty API."""
-
-
-class SpottyContractError(SpottyError):
-    """The configured contract id is unknown or not authorized."""
 
 
 class SpottySeriesError(SpottyError):
@@ -156,7 +154,7 @@ class Spotty:
             )
 
         if status in (401, 403):
-            raise SpottyContractError("Spotty rejected the configured contract id")
+            raise ConfigEntryError("Spotty rejected the configured contract id")
 
         if status != 200:
             raise SpottyError(f"Spotty API returned HTTP status {status}")
@@ -167,7 +165,7 @@ class Spotty:
             # Spotty answers an unknown contract id with HTTP 200 and a plain
             # text body ("Kein Abonnement gefunden ..."). The body echoes the
             # contract id, which is a secret, so it must not be logged.
-            raise SpottyContractError(
+            raise ConfigEntryError(
                 "Spotty did not return price data, check the contract id"
             ) from err
 
