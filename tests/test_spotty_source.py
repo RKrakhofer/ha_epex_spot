@@ -14,8 +14,6 @@ import pytest
 
 import aiohttp
 
-from homeassistant.exceptions import ConfigEntryError
-
 from epex_spot.EPEXSpot import Spotty
 
 VIENNA = ZoneInfo("Europe/Vienna")
@@ -134,7 +132,7 @@ def test_price_is_converted_from_ct_to_eur():
     assert source.marketdata[1].market_price_per_kwh == -0.035
 
 
-def test_timestamps_are_normalized_to_vienna():
+def test_timestamps_keep_timezone_from_payload():
     payload = [
         {"from": "2026-07-01T10:00:00+00:00", "price": 10.0},
         {"from": "2026-07-01T10:15:00+00:00", "price": 11.0},
@@ -142,7 +140,10 @@ def test_timestamps_are_normalized_to_vienna():
 
     source, _ = fetch(payload)
 
-    assert source.marketdata[0].start_time.isoformat() == "2026-07-01T12:00:00+02:00"
+    assert source.marketdata[0].start_time == datetime.fromisoformat(
+        "2026-07-01T10:00:00+00:00"
+    )
+    assert source.marketdata[0].start_time.tzinfo is not None
 
 
 def test_request_uses_normalized_contract_id_and_timezone():
@@ -169,14 +170,12 @@ def test_average_from_15_to_60_minutes():
     assert source.marketdata[1].market_price_per_kwh == 0.255
 
 
-def test_incomplete_trailing_group_is_dropped():
+def test_incomplete_trailing_group_is_rejected():
     start = datetime(2026, 11, 12, 10, 0, tzinfo=VIENNA)
     payload = slots(start, 6)
 
-    source, _ = fetch(payload, duration=60)
-
-    assert len(source.marketdata) == 1
-    assert source.marketdata[0].end_time == start + timedelta(minutes=60)
+    with pytest.raises(ValueError, match="trailing slot"):
+        fetch(payload, duration=60)
 
 
 def test_dst_spring_forward_day():
@@ -207,6 +206,78 @@ def test_dst_fall_back_day():
         assert entry.end_time.timestamp() == next_entry.start_time.timestamp()
 
 
+def test_dst_60_minute_slots_keep_real_duration():
+    for day in ("2026-03-29", "2026-10-25"):
+        hourly, _ = fetch(day_payload(day), duration=60)
+        for entry in hourly.marketdata:
+            assert entry.end_time - entry.start_time == timedelta(minutes=60)
+        for entry, next_entry in zip(hourly.marketdata, hourly.marketdata[1:]):
+            assert entry.end_time.timestamp() == next_entry.start_time.timestamp()
+
+
+def test_dst_spring_forward_explicit_hour_gap():
+    payload = [
+        {"from": "2026-03-29T01:00:00+01:00", "price": 2.0},
+        {"from": "2026-03-29T01:15:00+01:00", "price": 3.0},
+        {"from": "2026-03-29T01:30:00+01:00", "price": 4.0},
+        {"from": "2026-03-29T01:45:00+01:00", "price": 5.0},
+        {"from": "2026-03-29T03:00:00+02:00", "price": 6.0},
+        {"from": "2026-03-29T03:15:00+02:00", "price": 7.0},
+        {"from": "2026-03-29T03:30:00+02:00", "price": 8.0},
+        {"from": "2026-03-29T03:45:00+02:00", "price": 9.0},
+    ]
+
+    hourly, _ = fetch(payload, duration=60)
+
+    assert len(hourly.marketdata) == 2
+    gap_slot = hourly.marketdata[0]
+    assert gap_slot.start_time == datetime.fromisoformat("2026-03-29T01:00:00+01:00")
+    assert gap_slot.end_time == datetime.fromisoformat("2026-03-29T03:00:00+02:00")
+    assert gap_slot.end_time - gap_slot.start_time == timedelta(minutes=60)
+    assert gap_slot.market_price_per_kwh == pytest.approx(0.035, abs=1e-6)
+    assert hourly.marketdata[1].start_time == datetime.fromisoformat(
+        "2026-03-29T03:00:00+02:00"
+    )
+
+
+def test_dst_fall_back_explicit_repeated_hour():
+    payload = [
+        {"from": "2026-10-25T02:00:00+02:00", "price": 2.0},
+        {"from": "2026-10-25T02:15:00+02:00", "price": 3.0},
+        {"from": "2026-10-25T02:30:00+02:00", "price": 4.0},
+        {"from": "2026-10-25T02:45:00+02:00", "price": 5.0},
+        {"from": "2026-10-25T02:00:00+01:00", "price": 6.0},
+        {"from": "2026-10-25T02:15:00+01:00", "price": 7.0},
+        {"from": "2026-10-25T02:30:00+01:00", "price": 8.0},
+        {"from": "2026-10-25T02:45:00+01:00", "price": 9.0},
+    ]
+
+    hourly, _ = fetch(payload, duration=60)
+
+    assert len(hourly.marketdata) == 2
+    first, second = hourly.marketdata
+    assert first.start_time == datetime.fromisoformat("2026-10-25T02:00:00+02:00")
+    assert first.end_time == datetime.fromisoformat("2026-10-25T02:00:00+01:00")
+    assert second.start_time == datetime.fromisoformat("2026-10-25T02:00:00+01:00")
+    assert second.end_time == datetime.fromisoformat("2026-10-25T03:00:00+01:00")
+    assert first.end_time.timestamp() == second.start_time.timestamp()
+    assert first.end_time - first.start_time == timedelta(minutes=60)
+    assert second.end_time - second.start_time == timedelta(minutes=60)
+
+
+def test_dst_incomplete_group_is_rejected_not_repaired():
+    payload = [
+        {"from": "2026-03-29T01:00:00+01:00", "price": 1.0},
+        {"from": "2026-03-29T01:15:00+01:00", "price": 2.0},
+        {"from": "2026-03-29T01:30:00+01:00", "price": 3.0},
+        {"from": "2026-03-29T01:45:00+01:00", "price": 4.0},
+        {"from": "2026-03-29T03:00:00+02:00", "price": 5.0},
+    ]
+
+    with pytest.raises(ValueError, match="trailing slot"):
+        fetch(payload, duration=60)
+
+
 def test_plain_text_200_is_a_contract_error_without_leaking_the_token():
     source = Spotty.Spotty(
         market_area="at",
@@ -217,7 +288,7 @@ def test_plain_text_200_is_a_contract_error_without_leaking_the_token():
         token=CONTRACT_ID,
     )
 
-    with pytest.raises(ConfigEntryError) as error:
+    with pytest.raises(ValueError) as error:
         asyncio.run(source.fetch())
 
     assert CONTRACT_ID not in str(error.value)
@@ -231,7 +302,7 @@ def test_404_means_series_not_in_contract():
         token=CONTRACT_ID,
     )
 
-    with pytest.raises(Spotty.SpottySeriesError):
+    with pytest.raises(ValueError, match="MARKET price series"):
         asyncio.run(source.fetch())
 
 
@@ -243,12 +314,12 @@ def test_500_is_a_generic_error():
         token=CONTRACT_ID,
     )
 
-    with pytest.raises(Spotty.SpottyError):
+    with pytest.raises(ValueError, match="HTTP status 503"):
         asyncio.run(source.fetch())
 
 
 def test_empty_payload_is_rejected():
-    with pytest.raises(Spotty.SpottyError):
+    with pytest.raises(ValueError, match="no price data"):
         fetch([])
 
 
@@ -257,7 +328,7 @@ def test_duplicate_timestamps_are_rejected():
     payload = slots(start, 3)
     payload[1]["from"] = payload[0]["from"]
 
-    with pytest.raises(Spotty.SpottyError):
+    with pytest.raises(ValueError, match="duplicate"):
         fetch(payload)
 
 
@@ -267,7 +338,7 @@ def test_timestamp_without_timezone_is_rejected():
         {"from": "2026-11-12T10:15:00", "price": 11.0},
     ]
 
-    with pytest.raises(Spotty.SpottyError):
+    with pytest.raises(ValueError, match="without timezone"):
         fetch(payload)
 
 
@@ -335,14 +406,12 @@ def test_gap_does_not_raise_the_detected_resolution():
     assert source.marketdata[-1].end_time == starts[2] + timedelta(minutes=45)
 
 
-def test_shorter_duration_than_provided_is_kept():
+def test_shorter_duration_than_provided_is_rejected():
     start = datetime(2026, 11, 12, 10, 0, tzinfo=VIENNA)
     payload = slots(start, 2, step_minutes=60)
 
-    source, _ = fetch(payload, duration=15)
-
-    assert len(source.marketdata) == 2
-    assert source.marketdata[0].end_time == start + timedelta(minutes=60)
+    with pytest.raises(ValueError, match="shorter than the 60 minute interval"):
+        fetch(payload, duration=15)
 
 
 def test_401_is_a_contract_error():
@@ -353,7 +422,7 @@ def test_401_is_a_contract_error():
         token=CONTRACT_ID,
     )
 
-    with pytest.raises(ConfigEntryError):
+    with pytest.raises(ValueError, match="rejected the configured contract id"):
         asyncio.run(source.fetch())
 
 
@@ -369,7 +438,7 @@ def test_connection_error_is_wrapped():
         token=CONTRACT_ID,
     )
 
-    with pytest.raises(Spotty.SpottyError):
+    with pytest.raises(ValueError, match="Error connecting to Spotty API"):
         asyncio.run(source.fetch())
 
 
@@ -385,20 +454,20 @@ def test_timeout_is_wrapped():
         token=CONTRACT_ID,
     )
 
-    with pytest.raises(Spotty.SpottyError, match="Error connecting"):
+    with pytest.raises(ValueError, match="Error connecting to Spotty API"):
         asyncio.run(source.fetch())
 
 
 def test_non_finite_and_malformed_prices_are_rejected():
     payload = [{"from": "2026-11-12T10:00:00+01:00", "price": float("nan")}]
-    with pytest.raises(Spotty.SpottyError):
+    with pytest.raises(ValueError, match="non-finite"):
         fetch(payload)
 
-    with pytest.raises(Spotty.SpottyError):
+    with pytest.raises(ValueError, match="unexpected price entry"):
         fetch([{"price": 10.0}])
 
-    with pytest.raises(Spotty.SpottyError):
+    with pytest.raises(ValueError, match="unexpected price entry"):
         fetch([{"from": "not-a-date", "price": 10.0}])
 
-    with pytest.raises(Spotty.SpottyError):
+    with pytest.raises(ValueError, match="unexpected payload"):
         fetch(["nope"])

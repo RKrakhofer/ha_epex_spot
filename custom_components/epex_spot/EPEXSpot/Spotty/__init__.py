@@ -10,34 +10,20 @@ The endpoint is documented in the Spotty help center
 addressed by a contract id (UUID) which is a secret and therefore never logged.
 """
 
-import asyncio
 from datetime import datetime, timedelta
 import json
 import logging
 import math
 from typing import Any, List
 from uuid import UUID
-from zoneinfo import ZoneInfo
 
 import aiohttp
 
-from homeassistant.exceptions import ConfigEntryError
-
 from ...common import Marketprice, average_marketdata
-from ...const import TIMEZONE_AUSTRIA
 
 _LOGGER = logging.getLogger(__name__)
 
 API_URL = "https://at.spotty.app/api/prices/MARKET/{contract_id}"
-TIMEZONE = ZoneInfo(TIMEZONE_AUSTRIA)
-
-
-class SpottyError(Exception):
-    """Error while talking to the Spotty API."""
-
-
-class SpottySeriesError(SpottyError):
-    """The contract does not include the MARKET price series."""
 
 
 class Spotty:
@@ -102,38 +88,20 @@ class Spotty:
         )
 
         if self._duration < base_duration:
-            _LOGGER.warning(
-                "Requested interval of %d minutes is shorter than the %d minute "
-                "interval provided by Spotty, keeping the original interval",
-                self._duration,
-                base_duration,
+            raise ValueError(
+                f"Requested interval of {self._duration} minutes is shorter than "
+                f"the {base_duration} minute interval provided by Spotty"
             )
-        elif self._duration > base_duration:
+
+        if self._duration > base_duration:
             group_size = self._duration // base_duration
             if group_size > 1:
                 if len(marketdata) % group_size:
-                    # average_marketdata() groups by index, so an incomplete
-                    # trailing group would produce a wrong average.
-                    dropped = len(marketdata) % group_size
-                    _LOGGER.warning(
-                        "Dropping %d trailing slot(s) which do not fill a "
-                        "complete %d minute interval",
-                        dropped,
-                        self._duration,
+                    raise ValueError(
+                        f"Received {len(marketdata) % group_size} trailing slot(s) "
+                        f"which do not fill a complete {self._duration} minute interval"
                     )
-                    marketdata = marketdata[: len(marketdata) - dropped]
-
-                base_slots = marketdata
-                marketdata = average_marketdata(base_slots, self._duration)
-
-                # average_marketdata() derives the end time from the slot
-                # length, which is ambiguous when DST ends. The end of the
-                # averaged slot is the end of its last base slot.
-                for index, entry in enumerate(marketdata):
-                    last_slot = base_slots[
-                        min((index + 1) * group_size, len(base_slots)) - 1
-                    ]
-                    entry.set_end_time(last_slot.end_time)
+                marketdata = average_marketdata(marketdata, self._duration)
 
         self._marketdata = marketdata
 
@@ -144,20 +112,19 @@ class Spotty:
             async with self._session.get(url, params={"timezone": "at"}) as response:
                 status = response.status
                 body = await response.text()
-        except (aiohttp.ClientError, asyncio.TimeoutError) as err:
-            raise SpottyError("Error connecting to Spotty API") from err
+        except (aiohttp.ClientError, TimeoutError) as err:
+            raise ValueError("Error connecting to Spotty API") from err
 
         if status == 404:
-            raise SpottySeriesError(
-                "The configured Spotty contract does not include the MARKET "
-                "price series"
+            raise ValueError(
+                "The configured Spotty contract does not include the MARKET price series"
             )
 
         if status in (401, 403):
-            raise ConfigEntryError("Spotty rejected the configured contract id")
+            raise ValueError("Spotty rejected the configured contract id")
 
         if status != 200:
-            raise SpottyError(f"Spotty API returned HTTP status {status}")
+            raise ValueError(f"Spotty API returned HTTP status {status}")
 
         try:
             return json.loads(body)
@@ -165,43 +132,40 @@ class Spotty:
             # Spotty answers an unknown contract id with HTTP 200 and a plain
             # text body ("Kein Abonnement gefunden ..."). The body echoes the
             # contract id, which is a secret, so it must not be logged.
-            raise ConfigEntryError(
+            raise ValueError(
                 "Spotty did not return price data, check the contract id"
             ) from err
 
     @staticmethod
     def _extract_marketdata(payload: Any) -> List[Marketprice]:
         if not isinstance(payload, list) or not payload:
-            raise SpottyError("Spotty API returned no price data")
+            raise ValueError("Spotty API returned no price data")
 
         parsed = []
         for item in payload:
             if not isinstance(item, dict):
-                raise SpottyError("Spotty API returned an unexpected payload")
+                raise ValueError("Spotty API returned an unexpected payload")
 
             try:
                 start_time = datetime.fromisoformat(str(item["from"]))
                 price = float(item["price"])
             except (KeyError, TypeError, ValueError) as err:
-                raise SpottyError(
+                raise ValueError(
                     "Spotty API returned an unexpected price entry"
                 ) from err
 
             if start_time.tzinfo is None:
-                raise SpottyError("Spotty API returned a timestamp without timezone")
+                raise ValueError("Spotty API returned a timestamp without timezone")
 
             if not math.isfinite(price):
-                raise SpottyError("Spotty API returned a non-finite price")
+                raise ValueError("Spotty API returned a non-finite price")
 
-            parsed.append((start_time.astimezone(TIMEZONE), price))
+            parsed.append((start_time, price))
 
         parsed.sort(key=lambda entry: entry[0].timestamp())
-
         for (start, _), (next_start, _) in zip(parsed, parsed[1:]):
-            # Comparing datetimes of the same zone compares their wall clock,
-            # which is ambiguous when DST ends (02:00 exists twice).
-            if next_start.timestamp() <= start.timestamp():
-                raise SpottyError("Spotty API returned unsorted price entries")
+            if next_start.timestamp() == start.timestamp():
+                raise ValueError("Spotty API returned duplicate price entries")
 
         base_duration = Spotty._detect_duration([entry[0] for entry in parsed])
         marketdata = [

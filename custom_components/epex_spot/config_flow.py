@@ -4,9 +4,7 @@ Used by UI to setup integration.
 """
 
 import voluptuous as vol
-from hashlib import sha256
 from typing import List, Tuple
-from uuid import UUID
 
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, OptionsFlowWithReload
 from homeassistant.core import callback
@@ -58,14 +56,6 @@ CONF_SOURCE_LIST = (
     CONF_SOURCE_HOFER_GRUENSTROM,
     CONF_SOURCE_SPOTTY,
 )
-
-
-def normalize_spotty_token(value: str) -> str:
-    """Validate and normalize the Spotty contract id (a UUID)."""
-    try:
-        return str(UUID(str(value).strip()))
-    except (AttributeError, TypeError, ValueError) as err:
-        raise ValueError("invalid Spotty contract id") from err
 
 
 class EpexSpotConfigFlow(ConfigFlow, domain=DOMAIN):  # type: ignore
@@ -135,41 +125,11 @@ class EpexSpotConfigFlow(ConfigFlow, domain=DOMAIN):  # type: ignore
 
     async def async_step_market_area(self, user_input=None):
         if user_input is not None:
-            if self._source_name == CONF_SOURCE_SPOTTY:
-                try:
-                    user_input[CONF_TOKEN] = normalize_spotty_token(
-                        user_input[CONF_TOKEN]
-                    )
-                except ValueError:
-                    areas, durations, requires_token = getParametersForSource(
-                        self._source_name
-                    )
-                    return self.async_show_form(
-                        step_id="market_area",
-                        data_schema=self._market_area_schema(
-                            areas,
-                            durations,
-                            requires_token,
-                            defaults={
-                                CONF_MARKET_AREA: user_input.get(CONF_MARKET_AREA),
-                                CONF_DURATION: user_input.get(CONF_DURATION),
-                            },
-                        ),
-                        errors={CONF_TOKEN: "invalid_spotty_token"},
-                    )
-
             # create an entry for this configuration
             market_area = user_input[CONF_MARKET_AREA]
             title = f"{self._source_name} ({market_area})"
 
             unique_id = f"{DOMAIN} {self._source_name} {market_area}"
-            if self._source_name == CONF_SOURCE_SPOTTY:
-                # The contract id allows multiple Spotty contracts, so it has
-                # to be part of the unique id and the title. Only a digest is
-                # stored and shown, never the id itself.
-                digest = sha256(user_input[CONF_TOKEN].encode()).hexdigest()
-                unique_id = f"{unique_id} {digest[:8]}"
-                title = f"{title} #{digest[:4]}"
 
             await self.async_set_unique_id(unique_id)
             self._abort_if_unique_id_configured()
