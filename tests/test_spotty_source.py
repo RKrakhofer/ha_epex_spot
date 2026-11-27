@@ -109,7 +109,28 @@ def test_slot_end_is_start_of_next_slot():
     assert source.marketdata[-1].end_time == start + timedelta(minutes=60)
 
 
-def test_last_slot_inherits_predecessor_length():
+def test_end_time_comes_from_marketprice_without_override(monkeypatch):
+    """Spotty must not change end_time (review comment r4720405950).
+
+    Marketprice.__init__ already derives end_time from start_time + duration;
+    with offset-aware payload timestamps this also holds across DST changes.
+    """
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Spotty must not call Marketprice.set_end_time()")
+
+    monkeypatch.setattr(Spotty.Marketprice, "set_end_time", forbidden)
+
+    for payload, duration in (
+        (slots(datetime(2026, 11, 12, 10, 0, tzinfo=VIENNA), 4), 15),
+        (day_payload("2026-10-25"), 60),
+    ):
+        source, _ = fetch(payload, duration=duration)
+        for entry in source.marketdata:
+            assert entry.end_time == entry.start_time + timedelta(minutes=duration)
+
+
+def test_last_slot_keeps_base_duration_after_gap():
     start = datetime(2026, 11, 12, 10, 0, tzinfo=VIENNA)
     payload = slots(start, 3)
     payload[-1]["from"] = (start + timedelta(minutes=50)).isoformat()
@@ -117,7 +138,7 @@ def test_last_slot_inherits_predecessor_length():
     source, _ = fetch(payload)
 
     assert source.marketdata[-1].start_time == start + timedelta(minutes=50)
-    assert source.marketdata[-1].end_time == start + timedelta(minutes=85)
+    assert source.marketdata[-1].end_time == start + timedelta(minutes=65)
 
 
 def test_price_is_converted_from_ct_to_eur():
@@ -401,9 +422,8 @@ def test_gap_does_not_raise_the_detected_resolution():
     payload[2]["from"] = starts[2].isoformat()
 
     source, _ = fetch(payload)
-    assert source.marketdata[0].end_time == starts[1]
-    assert source.marketdata[1].end_time == starts[2]
-    assert source.marketdata[-1].end_time == starts[2] + timedelta(minutes=45)
+    for entry, start_time in zip(source.marketdata, starts):
+        assert entry.end_time == start_time + timedelta(minutes=15)
 
 
 def test_shorter_duration_than_provided_is_rejected():

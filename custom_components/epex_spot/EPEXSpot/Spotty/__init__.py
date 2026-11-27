@@ -10,7 +10,7 @@ The endpoint is documented in the Spotty help center
 addressed by a contract id (UUID) which is a secret and therefore never logged.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime
 import json
 import logging
 import math
@@ -177,20 +177,9 @@ class Spotty:
             for start_time, price in parsed
         ]
 
-        # Spotty does not deliver an end timestamp. The end of a slot is the
-        # start of the following one; the last slot inherits the length of its
-        # predecessor. Using the provided offsets keeps this correct on DST
-        # transition days, which have 92 resp. 100 slots instead of 96.
-        for entry, next_entry in zip(marketdata, marketdata[1:]):
-            entry.set_end_time(next_entry.start_time)
-
-        if len(marketdata) > 1:
-            last_duration = timedelta(
-                seconds=marketdata[-1].start_time.timestamp()
-                - marketdata[-2].start_time.timestamp()
-            )
-            marketdata[-1].set_end_time(marketdata[-1].start_time + last_duration)
-
+        # Marketprice already sets end_time from start_time + base_duration.
+        # With offset-aware timestamps from the payload this is also correct
+        # on DST days, so no manual adjustment of end_time is needed here.
         return marketdata
 
     @staticmethod
