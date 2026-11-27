@@ -15,11 +15,7 @@ from homeassistant.core import (
     ServiceResponse,
     SupportsResponse,
 )
-from homeassistant.exceptions import (
-    ConfigEntryError,
-    ConfigEntryNotReady,
-    HomeAssistantError,
-)
+from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.device_registry import (
@@ -77,10 +73,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     try:
         await source.fetch()
         source.update_time()
-    except ConfigEntryError:
-        # Configuration errors cannot be fixed by retrying, so let Home
-        # Assistant report them instead of scheduling endless retries.
-        raise
     except Exception as err:  # pylint: disable=broad-except
         ex = ConfigEntryNotReady()
         ex.__cause__ = err

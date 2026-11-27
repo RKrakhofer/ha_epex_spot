@@ -7,14 +7,14 @@ import logging
 import aiohttp
 
 from ...common import Marketprice, compress_marketdata
-from ...const import TIMEZONE_AUSTRIA
+from ...const import TIMEZONE_HOFER_GRUENSTROM
 
 _LOGGER = logging.getLogger(__name__)
 
 
 def _set_tz_on_date(date: datetime):
     """Set timezone on a date object."""
-    timezone = ZoneInfo(TIMEZONE_AUSTRIA)
+    timezone = ZoneInfo(TIMEZONE_HOFER_GRUENSTROM)
 
     if date.tzinfo is None:
         return date.replace(tzinfo=timezone)
@@ -65,7 +65,7 @@ class HoferGruenstrom:
 
     async def fetch(self):
         # get todays and tomorrows date components
-        today = datetime.now(ZoneInfo(TIMEZONE_AUSTRIA))
+        today = datetime.now(ZoneInfo(TIMEZONE_HOFER_GRUENSTROM))
         tomorrow = today + timedelta(days=1)
         dates = [today, tomorrow]
 

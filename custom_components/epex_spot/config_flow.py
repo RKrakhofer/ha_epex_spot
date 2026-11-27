@@ -88,29 +88,31 @@ class EpexSpotConfigFlow(ConfigFlow, domain=DOMAIN):  # type: ignore
             step_id="source", data_schema=data_schema, last_step=False
         )
 
-    @staticmethod
-    def _market_area_schema(areas, durations, requires_token, defaults=None):
-        defaults = defaults or {}
-        data_schema = {
-            vol.Required(
-                CONF_MARKET_AREA,
-                default=defaults.get(CONF_MARKET_AREA, vol.UNDEFINED),
-            ): vol.In(areas),
-            vol.Required(
-                CONF_DURATION,
-                default=defaults.get(CONF_DURATION, vol.UNDEFINED),
-            ): vol.All(vol.Coerce(int), vol.In(durations)),
-        }
-        if requires_token:
-            data_schema[vol.Required(CONF_TOKEN)] = vol.Coerce(str)
-        return vol.Schema(data_schema)
-
     async def async_step_source(self, user_input=None):
         self._source_name = user_input[CONF_SOURCE]
 
         areas, durations, requires_token = getParametersForSource(self._source_name)
 
-        data_schema = self._market_area_schema(areas, durations, requires_token)
+        data_schema = (
+            vol.Schema(
+                {
+                    vol.Required(CONF_MARKET_AREA): vol.In(areas),
+                    vol.Required(CONF_DURATION): vol.All(
+                        vol.Coerce(int), vol.In(durations)
+                    ),
+                    vol.Required(CONF_TOKEN): vol.Coerce(str),
+                }
+            )
+            if requires_token
+            else vol.Schema(
+                {
+                    vol.Required(CONF_MARKET_AREA): vol.In(areas),
+                    vol.Required(CONF_DURATION): vol.All(
+                        vol.Coerce(int), vol.In(durations)
+                    ),
+                },
+            )
+        )
 
         # Add warning for HoferGruenstrom about disabled SSL
         description_placeholders = {"ssl_warning": ""}
